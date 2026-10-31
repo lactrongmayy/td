@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import unicodedata
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
