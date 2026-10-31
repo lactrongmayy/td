@@ -1040,44 +1040,76 @@ async def quet(interaction: discord.Interaction):
         total_days = scan_progress["total_days"]
         total_messages = 0
         completed_days = 0
+        scan_progress.update(
+            {"running": True, "current": 0, "current_date": START_DATE.isoformat()}
+        )
 
-        await send_report(
-            report_channel,
-            (
-                "🔎 **BẮT ĐẦU QUÉT TIN NHẮN**\n"
-                f"📍 Kênh: <#{CHAT_CHANNEL_ID}>\n"
-                f"📅 Từ: {START_DATE.strftime('%d/%m/%Y')} Đến: {END_DATE.strftime('%d/%m/%Y')}"
-            ),
+        progress_message = await report_channel.send(
+            "🔎 **ĐANG QUÉT TIN NHẮN**\\n"
+            f"📍 Kênh: <#{CHAT_CHANNEL_ID}>\\n"
+            f"📅 {START_DATE.strftime('%d/%m/%Y')} → {END_DATE.strftime('%d/%m/%Y')}\\n"
+            f"⏳ Tiến trình: **0/{total_days}**"
         )
 
         try:
             day = START_DATE
             while day <= END_DATE:
-                completed_days += 1
                 count = await count_messages(source_channel, day)
                 save_daily_stats(CHAT_CHANNEL_ID, day, count)
                 total_messages += count
+                completed_days += 1
+                scan_progress.update(
+                    {"current": completed_days, "current_date": day.isoformat()}
+                )
+
+                await progress_message.edit(
+                    content=(
+                        "🔎 **ĐANG QUÉT TIN NHẮN**\\n"
+                        f"📍 Kênh: <#{CHAT_CHANNEL_ID}>\\n"
+                        f"📅 Ngày vừa quét: {day.strftime('%d/%m/%Y')}\\n"
+                        f"⏳ Tiến trình: **{completed_days}/{total_days}**"
+                    )
+                )
                 day += timedelta(days=1)
 
             total_messages = get_total_stats(CHAT_CHANNEL_ID)
             finish_scan_run(run_id, total_messages, "completed")
-            await send_report(
-                report_channel,
-                f"✅ **HOÀN TẤT QUÉT DỮ LIỆU**\n💬 Tổng tin nhắn: **{total_messages:,}**",
+            scan_progress.update(
+                {"running": False, "current": total_days, "current_date": END_DATE.isoformat()}
+            )
+            await progress_message.edit(
+                content=(
+                    "✅ **HOÀN TẤT QUÉT DỮ LIỆU**\\n"
+                    f"📍 Kênh: <#{CHAT_CHANNEL_ID}>\\n"
+                    f"📅 {START_DATE.strftime('%d/%m/%Y')} → {END_DATE.strftime('%d/%m/%Y')}\\n"
+                    f"📊 Tiến trình: **{total_days}/{total_days}**\\n"
+                    f"💬 Tổng tin nhắn: **{total_messages:,}**"
+                )
             )
             await interaction.followup.send(
-                "✅ Đã quét xong toàn bộ dữ liệu.", ephemeral=True
+                f"✅ Đã quét xong {total_days} ngày. Tổng cộng **{total_messages:,}** tin nhắn.",
+                ephemeral=True,
             )
         except Exception as exc:
-            finish_scan_run(
-                run_id, get_total_stats(CHAT_CHANNEL_ID), "failed"
-            )
+            scan_progress["running"] = False
+            finish_scan_run(run_id, get_total_stats(CHAT_CHANNEL_ID), "failed")
+            try:
+                await progress_message.edit(
+                    content=(
+                        "⚠️ **QUÉT BỊ GIÁN ĐOẠN**\\n"
+                        f"Tiến trình: **{completed_days}/{total_days}**\\n"
+                        f"Lỗi: `{str(exc)[:500]}`"
+                    )
+                )
+            except discord.HTTPException:
+                logger.exception("Không thể cập nhật thông báo tiến trình quét.")
+            logger.exception("Quá trình /quet bị gián đoạn.")
             await interaction.followup.send(
-                f"⚠️ Quá trình quét bị gián đoạn: {exc}", ephemeral=True
+                f"⚠️ Quá trình quét bị gián đoạn tại {completed_days}/{total_days} ngày.",
+                ephemeral=True,
             )
 
 
-# =========================================================
 # EVENT HANDLERS (MESSAGES & VOICE)
 # =========================================================
 
@@ -1179,6 +1211,23 @@ async def record_and_delete_message(message: discord.Message) -> bool:
         return False
 
 
+def describe_attachment(attachment: discord.Attachment) -> str:
+    """Phân loại tệp đính kèm để nhật ký dễ đọc hơn."""
+    filename = attachment.filename.lower()
+    content_type = (attachment.content_type or "").lower()
+    video_extensions = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v")
+    image_extensions = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+    if content_type.startswith("video/") or filename.endswith(video_extensions):
+        kind = "🎥 Video"
+    elif content_type.startswith("image/") or filename.endswith(image_extensions):
+        kind = "🖼️ Ảnh"
+    else:
+        kind = "📎 Tệp"
+
+    return f"• {kind}: `{attachment.filename}` — {attachment.url}"
+
+
 @bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author.bot:
@@ -1276,17 +1325,22 @@ async def on_message(message: discord.Message) -> None:
 
     # 6. Ghi log hoạt động nhắn tin của thành viên được theo dõi (/theodoi)
     content = message.content.strip() or "(Không có nội dung văn bản)"
-    attachments_list = [
-        f"• {att.filename} — {att.url}" for att in message.attachments
-    ]
     description = (
-        f"**Thành viên:** {message.author.mention}\n"
-        f"**Kênh:** {message.channel.mention}\n"
-        f"**Nội dung:**\n{content}\n"
+        f"**Thành viên:** {message.author.mention} (`{message.author}`)\\n"
+        f"**Kênh:** {message.channel.mention}\\n"
+        f"**Nội dung:**\\n{content}\\n"
         f"**Thời gian:** {timestamp()}"
     )
-    if attachments_list:
-        description += "\n**Tệp đính kèm:**\n" + "\n".join(attachments_list)
+
+    if message.attachments:
+        attachment_lines = [describe_attachment(att) for att in message.attachments]
+        description += "\\n**Tệp đính kèm:**\\n" + "\\n".join(attachment_lines)
+
+    if message.stickers:
+        sticker_lines = [
+            f"• 😀 Sticker: **{sticker.name}**" for sticker in message.stickers
+        ]
+        description += "\\n**Sticker:**\\n" + "\\n".join(sticker_lines)
 
     await send_log(message.guild.id, message.author.id, "💬 Tin nhắn mới", description)
     await bot.process_commands(message)
