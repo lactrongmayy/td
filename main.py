@@ -53,12 +53,21 @@ MOD_LOG_CHANNEL_ID = 1496564307306090526
 REMINDER_CHANNEL_ID = 1502014155581030501
 LLAUDON_CHANNEL_ID = 1541782500760879214
 
+# Kênh nhận thông báo boost
+BOOST_CHANNEL_ID = 1564211846758793266
+
 ALLOWED_LLAUDON_MESSAGES = {"llaudon", "Llaudon"}
 LOG_MENTION = "<@1356498767788118099>"
 LONG_MESSAGE_LOG_MENTION = (
     "<@1356498767788118099> "
     "<@&1534905534522724614> "
     "<@&1505079149113511987>"
+)
+
+# Ảnh GIF Doro hiển thị ở phần hình lớn của thông báo boost
+BOOST_GIF_URL = (
+    "https://cdn.discordapp.com/attachments/1545687528777191434/"
+    "1564212955481120849/Clap_Doro_GIF.gif"
 )
 
 
@@ -518,6 +527,31 @@ async def log_admin_action(
 
 
 # =========================================================
+# THÔNG BÁO BOOST
+# =========================================================
+
+async def send_boost_embed(
+    channel: discord.abc.Messageable,
+    member: discord.Member,
+) -> None:
+    """Gửi embed cảm ơn boost vào kênh chỉ định."""
+    embed = discord.Embed(
+        description=(
+            f"Pháp sư {member.mention} vừa triệu hồi một quả Boost cực căng "
+            f"khiến toàn bộ server rung chuyển! 🍂 "
+            f"Cảm ơn bạn đã tiếp thêm công lực cho server nhor! 🎮🚀"
+        ),
+        color=discord.Color.from_rgb(255, 182, 193),  # Hồng dễ thương
+    )
+    # Avatar người boost ở góc phải (thumbnail)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    # GIF Doro ở phần hình lớn bên dưới
+    embed.set_image(url=BOOST_GIF_URL)
+
+    await channel.send(embed=embed)
+
+
+# =========================================================
 # VOICE: BÁM PHÒNG
 # =========================================================
 
@@ -936,6 +970,63 @@ async def turn_off(interaction: discord.Interaction):
     bot_enabled = False
     await interaction.response.send_message(
         "🛑 Đã tắt chức năng ghi nhận và xóa tin nhắn.", ephemeral=True
+    )
+
+
+# =========================================================
+# SLASH COMMAND: TEST THÔNG BÁO BOOST
+# =========================================================
+
+@bot.tree.command(
+    name="test",
+    description="Test thử thông báo boost (chỉ dành cho người có role cao hơn bot)",
+)
+@app_commands.guild_only()
+async def test_boost(interaction: discord.Interaction):
+    member = interaction.user  # Trong server thì đây là discord.Member
+    guild = interaction.guild
+
+    if guild is None or not isinstance(member, discord.Member):
+        await interaction.response.send_message(
+            "❌ Lệnh này chỉ dùng trong server.", ephemeral=True
+        )
+        return
+
+    # Chủ server luôn được phép; người khác cần role cao hơn bot.
+    is_guild_owner = member.id == guild.owner_id
+    if not is_guild_owner and member.top_role <= guild.me.top_role:
+        await interaction.response.send_message(
+            "❌ Bạn cần có **role cao hơn bot** mới được dùng lệnh này!",
+            ephemeral=True,
+        )
+        return
+
+    channel = await get_channel_any(BOOST_CHANNEL_ID)
+    if channel is None:
+        await interaction.response.send_message(
+            f"❌ Không tìm thấy kênh boost có ID: {BOOST_CHANNEL_ID}",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await send_boost_embed(channel, member)
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Bot không có quyền gửi tin nhắn/embed vào kênh boost.",
+            ephemeral=True,
+        )
+        return
+    except discord.HTTPException:
+        logger.exception("Không gửi được thông báo boost test.")
+        await interaction.response.send_message(
+            "❌ Có lỗi khi gửi thông báo boost. Hãy kiểm tra log bot.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        "✅ Đã gửi tin nhắn test boost vào kênh chỉ định!", ephemeral=True
     )
 
 
@@ -1372,7 +1463,7 @@ async def on_command_error(
 
 
 # =========================================================
-# NHẬC NHỞ KÊNH TÌM BẠN CHƠI
+# NHẮC NHỞ KÊNH TÌM BẠN CHƠI
 # =========================================================
 
 @tasks.loop(minutes=2)
@@ -1857,6 +1948,27 @@ async def on_message_delete(message: discord.Message):
         f"**Kênh:** {message.channel.mention}\n"
         f"**Nội dung đã ghi nhận:**\n{message.content or '(Không có nội dung trong cache)'}",
     )
+
+
+# =========================================================
+# EVENT: THÀNH VIÊN CẬP NHẬT (PHÁT HIỆN BOOST)
+# =========================================================
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    # premium_since chuyển từ None sang có giá trị = vừa boost server.
+    if before.premium_since is None and after.premium_since is not None:
+        channel = await get_channel_any(BOOST_CHANNEL_ID)
+        if channel is None:
+            logger.warning("Không tìm thấy kênh boost %s.", BOOST_CHANNEL_ID)
+            return
+
+        try:
+            await send_boost_embed(channel, after)
+        except discord.Forbidden:
+            logger.error("Bot không có quyền gửi thông báo boost.")
+        except discord.HTTPException:
+            logger.exception("Không gửi được thông báo boost.")
 
 
 # =========================================================
