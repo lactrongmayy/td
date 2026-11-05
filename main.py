@@ -56,9 +56,6 @@ LLAUDON_CHANNEL_ID = 1541782500760879214
 # Kênh nhận thông báo boost
 BOOST_CHANNEL_ID = 1564211846758793266
 
-# Kênh log soundboard (biểu cảm tiếng)
-SOUNDBOARD_LOG_CHANNEL_ID = read_int_setting("LOG_CHANNEL_ID", 1556550052309377064)
-
 ALLOWED_LLAUDON_MESSAGES = {"llaudon", "Llaudon"}
 LOG_MENTION = "<@1356498767788118099>"
 LONG_MESSAGE_LOG_MENTION = (
@@ -328,7 +325,6 @@ intents.members = True
 intents.messages = True
 intents.message_content = True
 intents.voice_states = True
-intents.expressions = True  # Để nhận event soundboard + tra tên âm thanh
 
 
 class CombinedBot(commands.Bot):
@@ -2034,52 +2030,6 @@ async def on_voice_state_update(
             )
         except (discord.Forbidden, discord.NotFound, discord.HTTPException):
             logger.exception("Không thông báo được người vào phòng.")
-
-
-# =========================================================
-# EVENT: SOUNDBOARD (BIỂU CẢM TIẾNG)
-# =========================================================
-
-@bot.event
-async def on_voice_channel_effect(effect: discord.VoiceChannelEffect):
-    # Chỉ ghi lại khi là soundboard (không phải emoji effect thường)
-    if effect.sound is None:
-        return
-
-    log_channel = bot.get_channel(SOUNDBOARD_LOG_CHANNEL_ID)
-    if log_channel is None:
-        logger.warning("Không tìm thấy kênh log soundboard, kiểm tra SOUNDBOARD_LOG_CHANNEL_ID / LOG_CHANNEL_ID")
-        return
-
-    guild = effect.channel.guild
-    sound = effect.sound
-
-    # Tra tên âm thanh: ưu tiên cache của server, sau đó tới thuộc tính có sẵn
-    name = None
-    full = guild.get_soundboard_sound(sound.id)
-    if full is not None:
-        name = full.name
-    else:
-        name = getattr(sound, "name", None) or f"ID {sound.id}"
-
-    emoji = getattr(full, "emoji", None) or getattr(sound, "emoji", None)
-    title = f"{emoji} {name}" if emoji else name
-
-    embed = discord.Embed(
-        title="Biểu cảm tiếng được phát",
-        description=f"**{title}**",
-        color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(name="Người dùng", value=effect.user.mention, inline=True)
-    embed.add_field(name="Kênh thoại", value=effect.channel.mention, inline=True)
-    embed.add_field(name="Âm lượng", value=f"{int(sound.volume * 100)}%", inline=True)
-    embed.set_thumbnail(url=effect.user.display_avatar.url)
-
-    try:
-        await log_channel.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException) as e:
-        logger.error("Không gửi được log soundboard: %s", e)
 
 
 # =========================================================
